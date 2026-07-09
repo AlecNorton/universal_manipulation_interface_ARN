@@ -5,7 +5,8 @@ import argparse
 import glob
 import os 
 import pathlib
-import subprocess
+from datetime import datetime
+import json
 
 ROOT_DIR = os.path.dirname(os.path.dirname(__file__))
 
@@ -18,12 +19,13 @@ def extract_video_and_IMU(bag_file, topics_list, demo_dir, raw_video_dir):
     frame_rate = 30
     frame_size = None
 
+    imu_data = {"1":{"streams":{"ACCL":{"samples":[]}, "GYRO":{"samples":[]}, "CYRO":{"samples":[]}}}}
     raw_video_writer = None
     demo_video_writer = None
-    output_dir= pathlib.Path(demo_dir).joinpath('demo_'+bag_file[0:-4])
-    output_video = pathlib.Path(output_dir).joinpath("raw_video.mp4")
-    if(not os.path.exists(output_dir)):
-        os.mkdir(output_dir)
+    start_gyro_time = None
+    start_accel_time = None
+    bag_file = os.path.basename(bag_file)
+    
 
     if('mapping' in bag_file):
         raw_video_file = pathlib.Path(raw_video_dir).joinpath('mapping.mp4')
@@ -31,7 +33,7 @@ def extract_video_and_IMU(bag_file, topics_list, demo_dir, raw_video_dir):
         if (not os.path.exists(output_dir)):
             os.mkdir(output_dir)
         output_video = output_dir.joinpath('raw_video.mp4')
-    else if ('gripper_calibration' in bag_file):
+    elif ('calibration' in bag_file):
         gripper_calibration_dir = pathlib.Path(raw_video_dir).joinpath('gripper_calibration')
         if(not os.path.exists(gripper_calibration_dir)):
             os.mkdir(gripper_calibration_dir)
@@ -41,14 +43,15 @@ def extract_video_and_IMU(bag_file, topics_list, demo_dir, raw_video_dir):
             os.mkdir(output_dir)
         output_video = output_dir.joinpath('raw_video.mp4')
     else:
-        raw_video_file = pathlib.Path(raw_video_dir).joinpath(bag_file[0:-4])
-        output_dir = pathlib.Path(demo_dir).joinpath(bag_file[0:-4])
-        if (not os.path.exists(output_dir)):
+        output_dir= pathlib.Path(demo_dir).joinpath('demo_'+bag_file[0:-4])
+        output_video = pathlib.Path(output_dir).joinpath("raw_video.mp4")
+        raw_video_file = pathlib.Path(raw_video_dir).joinpath("raw_video.mp4")
+        if(not os.path.exists(output_dir)):
             os.mkdir(output_dir)
-        output_video = output_dir.joinpath('raw_video.mp4')
-
+    
     
     for topic, msg, t in bag.read_messages(topics=topics_list):
+        print(topic)
         if("image/data" in topic):
             try:
                 frame = bridge.imgmsg_to_cv2(msg, "bgr8")
@@ -63,6 +66,22 @@ def extract_video_and_IMU(bag_file, topics_list, demo_dir, raw_video_dir):
             demo_video_writer.write(frame)
             raw_video_writer.write(frame)
 
+        if("imu/data" in topic):            
+            print(msg.header)
+            cal_time = datetime.fromtimestamp(msg.header.stamp.secs)
+            if(start_gyro_time is None and "Gyro" in topic):
+            #Initialize as milliseconds
+                start_gyro_time = (msg.header.stamp.secs * 1000) + msg.header.stamp.nsecs*1e-6
+            elif(start_accel_time is None and "Accel" in topic):
+                start_accel_time = (msg.header.stamp.secs * 1000) + msg.header.stamp.nsecs*1e-6
+            if("Accel" in topic):
+                cts = msg.header.stamp.secs*1000 + msg.header.stamp.nsecs*1e-6 - start_accel_time
+                imu_data["1"]["streams"]["ACCL"]["samples"].append({"value": [msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z], "cts":cts, "date":str(cal_time)})
+            elif("Gyro" in topic):
+                cts = msg.header.stamp.secs*1000 + msg.header.stamp.nsecs*1e-6 - start_gyro_time
+                imu_data["1"]["streams"]["GYRO"]["samples"].append({"value": [msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z], "cts":cts, "date":str(cal_time)})
+            
+
     bag.close()
     if raw_video_writer is not None:
         raw_video_writer.release()
@@ -70,6 +89,10 @@ def extract_video_and_IMU(bag_file, topics_list, demo_dir, raw_video_dir):
     if demo_video_writer is not None:
         demo_video_writer.release()
         print(f"Video saved as {output_video}")
+
+    json_str = json.dumps(imu_data)
+    with open(str(output_dir) + "/imu_data.json", "w") as f:
+        f.write(json_str)
 
 
 
@@ -95,7 +118,7 @@ if __name__ == "__main__":
     if not os.path.exists(mapping_dir):
         os.mkdir(mapping_dir)
     if not os.path.exists(raw_video_dir):
-        os.mmkdir(raw_video_dir)
+        os.mkdir(raw_video_dir)
 
     
     
@@ -109,7 +132,7 @@ if __name__ == "__main__":
         topics = bag.get_type_and_topic_info()[1].keys()
         topics_list = []
         for t in topics:
-            print("Topic.." + str(t))
+            #print("Topic.." + str(t))
             for target in target_topics:
                 if(target in t):
                     topics_list.append(t)
@@ -117,7 +140,3 @@ if __name__ == "__main__":
         extract_video_and_IMU(bag_file, topics_list, demo_dir, raw_video_dir)
 
             
-
-    
-    
-        
